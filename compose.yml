@@ -1,0 +1,46 @@
+services:
+  # 1service = 1コンテナ　db, web, volumesを同時に立ち上げ仲良く連携させる配膳表
+  # db = PostgreSQLという蔵
+  db:
+    image: postgres:17
+    restart: always # コンテナが落ちたら自動復帰
+    environment: # 開発環境用の初期設定
+      TZ: Asia/Tokyo # TZ: タイムゾーン
+      POSTGRES_PASSWORD: postgres # Postgresユーザーのpassword追加
+    volumes: # DBのデータ保存場所をDocker　Volumeにして接続
+      - postgresql_data:/var/lib/postgresql/data
+    ports: # 外からDBを覗くためのドア psqlなどで(本番では閉じる)
+      - 5432:5432 # マック側:コンテナ内
+    healthcheck: # DockerのDBへの定期確認（接続可能確認（起きているだけじゃなく目が覚めてるかの確認）定気間隔、タイムアウト、何回でNG）
+      test: ["CMD-SHELL", "pg_isready -U postgres"] # 入っていた'-d myapp_development' はrails db:prepare で 後から作られるので今回は退出！
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  # web = Railsという厨房
+  web:
+    build:
+      context: .  # 今のディレクトリを材料に
+      dockerfile: Dockerfile.dev  # Dockerfile.devを使ってイメージ作成
+    command: bash -c "bundle install && bundle exec rails db:prepare && rm -f tmp/pids/server.pid && ./bin/dev"
+    # Rails起動前の儀式フルセット
+    #順番に噛むと bundle install:gemを揃える/rails db:prepare:DB作成 + migrate/ rm -f pids/server.pid 不要なものを強制削除: 「すでに起動してます」エラー回避/ ./bin/dev: Rails + JS + CSS 同時起動
+    tty: true # コンテナを対話モード(開発モードで必須)
+    stdin_open: true # binding.pry/ rails console /Ctrl+C で止めたい
+    volumes:
+      - .:/myapp # Macのコード ↔ コンテナの /myapp を同期 （保存したら即反映、Docker再ビルド不要）
+      - bundle_data:/usr/local/bundle:cached # gemのインストール先をvolume化（bundle install を毎回やらない　＆　MacとDockerでgem衝突を避ける）　＋　Mac優先でキャッシュ使う（macOS向け最適化）
+      - node_modules:/myapp/node_modules # node_modules専用の保管庫(MacとLinuxで依存バイナリが違うことによるホスト汚染を防ぐ（JS同士の地雷原を隔離。）)
+
+    environment:
+      TZ: Asia/Tokyo # Rails側の時刻も日本時間に
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "3000:3000" # ブラウザ → Rails への入り口（部屋番号）
+    depends_on: # DBが元気になってから web を起動
+      db:
+        condition: service_healthy
+# volmes = 食在庫(永続保存)
+volumes: # Dockerが管理する永続ストレージ
+  bundle_data: # Ruby gems
+  postgresql_data: # DBデータ
+  node_modules: # JS依存
